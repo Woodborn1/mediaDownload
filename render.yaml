@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: videoload
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free          # змінити на starter/standard для продакшну
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+    disk:
+      name: downloads
+      mountPath: /app/downloads
+      sizeGB: 1
