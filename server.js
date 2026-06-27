@@ -8,6 +8,22 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const DOWNLOADS_DIR = path.join(__dirname, "downloads");
 
+// ── Cookies з env змінної (для Render) ──────────────────────────────────────
+const cookiesEnv = process.env.YOUTUBE_COOKIES;
+if (cookiesEnv && !fs.existsSync(COOKIES_PATH)) {
+  fs.writeFileSync(COOKIES_PATH, cookiesEnv, "utf8");
+  console.log("✅ cookies.txt створено з env змінної");
+}
+
+function getCookiesArgs() {
+  return fs.existsSync(COOKIES_PATH) ? ["--cookies", COOKIES_PATH] : [];
+}
+
+function getCookiesFlag() {
+  return fs.existsSync(COOKIES_PATH) ? `--cookies "${COOKIES_PATH}"` : "";
+}
+// ────────────────────────────────────────────────────────────────────────────
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -31,9 +47,9 @@ app.get("/api/info", (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: "URL is required" });
 
-const cookiesPath = path.join(__dirname, 'cookies.txt');
-const cookiesFlag = fs.existsSync(cookiesPath) ? `--cookies "${cookiesPath}"` : '';
-const cmd = `yt-dlp --dump-json --no-warnings ${cookiesFlag} "${url}"`;
+  const cookiesFlag = getCookiesFlag();
+  const cmd = `yt-dlp --dump-json --no-warnings ${cookiesFlag} "${url}"`;
+
   exec(cmd, { timeout: 30000 }, (err, stdout, stderr) => {
     if (err) {
       console.error("yt-dlp info error:", stderr);
@@ -52,7 +68,6 @@ const cmd = `yt-dlp --dump-json --no-warnings ${cookiesFlag} "${url}"`;
         }))
         .sort((a, b) => b.height - a.height);
 
-      // Deduplicate by height
       const seen = new Set();
       const unique = formats.filter((f) => {
         const key = `${f.height}`;
@@ -61,7 +76,6 @@ const cmd = `yt-dlp --dump-json --no-warnings ${cookiesFlag} "${url}"`;
         return true;
       });
 
-      // Always add "best" option
       const options = [{ format_id: "bestvideo+bestaudio/best", label: "🏆 Найкраща якість (авто)", height: 9999 }, ...unique];
 
       res.json({
@@ -78,6 +92,9 @@ const cmd = `yt-dlp --dump-json --no-warnings ${cookiesFlag} "${url}"`;
   });
 });
 
+// In-memory job store
+const jobs = new Map();
+
 // POST /api/download — start download
 app.post("/api/download", (req, res) => {
   const { url, format_id, start_time, end_time } = req.body;
@@ -88,12 +105,12 @@ app.post("/api/download", (req, res) => {
 
   const args = [
     "--no-warnings",
+    ...getCookiesArgs(),
     "-f", format_id || "bestvideo+bestaudio/best",
     "--merge-output-format", "mp4",
     "-o", outputTemplate,
   ];
 
-  // Timecode support via ffmpeg section
   if (start_time || end_time) {
     const downloadSections = `*${start_time || "0"}-${end_time || "inf"}`;
     args.push("--download-sections", downloadSections);
@@ -102,10 +119,8 @@ app.post("/api/download", (req, res) => {
 
   args.push(url);
 
-  // Return job ID immediately
   res.json({ jobId });
 
-  // Run download in background, track progress
   const job = { id: jobId, status: "downloading", progress: 0, filename: null, error: null };
   jobs.set(jobId, job);
 
@@ -123,7 +138,6 @@ app.post("/api/download", (req, res) => {
 
   proc.on("close", (code) => {
     if (code === 0) {
-      // Find the output file
       const files = fs.readdirSync(DOWNLOADS_DIR).filter((f) => f.startsWith(jobId));
       if (files.length > 0) {
         job.filename = files[0];
@@ -140,9 +154,6 @@ app.post("/api/download", (req, res) => {
   });
 });
 
-// In-memory job store (replace with MongoDB if needed)
-const jobs = new Map();
-
 // GET /api/status/:jobId
 app.get("/api/status/:jobId", (req, res) => {
   const job = jobs.get(req.params.jobId);
@@ -150,7 +161,7 @@ app.get("/api/status/:jobId", (req, res) => {
   res.json(job);
 });
 
-// GET /api/file/:jobId — serve the file for download
+// GET /api/file/:jobId
 app.get("/api/file/:jobId", (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job || job.status !== "done") return res.status(404).json({ error: "File not ready" });
