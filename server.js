@@ -31,7 +31,9 @@ app.get("/api/info", (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: "URL is required" });
 
-  const cmd = `yt-dlp --dump-json --no-warnings "${url}"`;
+const cookiesPath = path.join(__dirname, 'cookies.txt');
+const cookiesFlag = fs.existsSync(cookiesPath) ? `--cookies "${cookiesPath}"` : '';
+const cmd = `yt-dlp --dump-json --no-warnings ${cookiesFlag} "${url}"`;
   exec(cmd, { timeout: 30000 }, (err, stdout, stderr) => {
     if (err) {
       console.error("yt-dlp info error:", stderr);
